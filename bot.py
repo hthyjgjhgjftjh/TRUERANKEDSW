@@ -6,7 +6,7 @@ from datetime import datetime
 import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
-ALLOWED_ROLE_ID = 1517852942122614844
+ALLOWED_ROLE_ID = 1517891459372683404
 # Cleaned up URL parameters to ensure Discord renders the image correctly
 LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png"
 # ---------------------
