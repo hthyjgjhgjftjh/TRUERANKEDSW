@@ -178,7 +178,7 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
         await interaction.response.send_message("❌ Position must be between 1 and 16.", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=False)
 
     c.execute('SELECT rank FROM stats WHERE user_id = ?', (user.id,))
     existing_row = c.fetchone()
@@ -193,7 +193,7 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()  # Forces SQLite database file write immediately
     
-    await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=True)
+    await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_lb_position", description="Remove a user from the leaderboard entirely")
