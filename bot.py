@@ -6,8 +6,10 @@ from datetime import datetime
 import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
-ALLOWED_ROLE_ID = 1517891459372683404
-# Cleaned up URL parameters to ensure Discord renders the image correctly
+# Changed to a list to support multiple Role IDs
+ALLOWED_ROLE_IDS = [1517891459372683404, 1517852942122614844] 
+
+# Remember to change this to an external permanent URL (like Imgur/Postimages) so it doesn't expire!
 LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png"
 # ---------------------
 
@@ -41,6 +43,20 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# --- CUSTOM MULTI-ROLE CHECK ---
+def has_any_allowed_role():
+    """Custom check to see if the user has any of the IDs listed in ALLOWED_ROLE_IDS."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return False
+        # Extract the IDs of all roles the user currently has
+        user_role_ids = [role.id for role in interaction.user.roles]
+        # Check if there is any intersection between user roles and allowed roles
+        if any(role_id in ALLOWED_ROLE_IDS for role_id in user_role_ids):
+            return True
+        raise app_commands.MissingRole(ALLOWED_ROLE_IDS[0]) # Triggers the error handler
+    return app_commands.check(predicate)
 
 # --- UTILITY HELPER ---
 def get_flag_emoji(country_input: str) -> str:
@@ -106,14 +122,13 @@ async def on_ready():
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingRole):
-        await interaction.response.send_message("❌ You don't have the required role to use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ You don't have a required role to use this command.", ephemeral=True)
     else:
         raise error
 
 # --- LIVE REFRESH HELPER ---
 async def update_live_leaderboard(guild: discord.Guild):
     """Fetches data and automatically updates the active live tracking message."""
-    # Ensure fresh read from DB
     c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
     
@@ -137,7 +152,7 @@ async def update_live_leaderboard(guild: discord.Guild):
 class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Leaderboard configurations"):
     
     @app_commands.command(name="setup", description="Spawn the live-updating leaderboard tracking message")
-    @app_commands.checks.has_role(ALLOWED_ROLE_ID)
+    @has_any_allowed_role()
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -147,7 +162,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         embed = generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
-        # Save this specific message to database config for live background tracking
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
@@ -168,7 +182,7 @@ bot.tree.add_command(LeaderboardGroup())
 
 # --- RANK POSITION COMMANDS ---
 @bot.tree.command(name="set_lb_position", description="Add/Move user to a specific leaderboard position")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 @app_commands.describe(
     country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag",
     custom_name="Optional: The player's clean name to show beside their @mention"
@@ -180,7 +194,6 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
 
     await interaction.response.defer(ephemeral=True)
 
-    # 1. Clear old placement if they already had a ranking assignment
     c.execute('SELECT rank FROM stats WHERE user_id = ?', (user.id,))
     existing_row = c.fetchone()
     if existing_row and existing_row[0] > 0:
@@ -188,16 +201,10 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
         c.execute('UPDATE stats SET rank = 0 WHERE user_id = ?', (user.id,))
         c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (old_rank,))
 
-    # 2. Shift others down to create room
     c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
-    
-    # 3. Inject baseline row profile if it didn't exist yet
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
-    # 4. Bind user into new assigned spot
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
-    
-    # 5. Kick off anyone pushed past slot 16
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()
     
@@ -205,7 +212,7 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_lb_position", description="Remove a user from the leaderboard entirely")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def remove_lb_position(interaction: discord.Interaction, user: discord.Member):
     c.execute('SELECT rank FROM stats WHERE user_id = ?', (user.id,))
     row = c.fetchone()
@@ -226,7 +233,7 @@ async def remove_lb_position(interaction: discord.Interaction, user: discord.Mem
 
 # --- STATS RESET COMMAND ---
 @bot.tree.command(name="reset_stats", description="Completely wipe a user's stats and remove them from rankings")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def reset_stats(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.defer(ephemeral=True)
     
@@ -245,7 +252,7 @@ async def reset_stats(interaction: discord.Interaction, user: discord.Member):
 
 # --- MATCH COMPONENT COMMANDS ---
 @bot.tree.command(name="set_streak", description="Manually set a user's win streak")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def set_streak(interaction: discord.Interaction, user: discord.Member, amount: int):
     if amount < 0:
         await interaction.response.send_message("❌ Streak amount cannot be negative.", ephemeral=True)
@@ -259,7 +266,7 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="add_win", description="Give a user a win")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def add_win(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET wins = wins + 1, streak = streak + 1 WHERE user_id = ?', (user.id,))
@@ -268,7 +275,7 @@ async def add_win(interaction: discord.Interaction, user: discord.Member):
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_win", description="Remove a win")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def remove_win(interaction: discord.Interaction, user: discord.Member):
     c.execute('UPDATE stats SET wins = MAX(0, wins - 1), streak = MAX(0, streak - 1) WHERE user_id = ?', (user.id,))
     conn.commit()
@@ -276,7 +283,7 @@ async def remove_win(interaction: discord.Interaction, user: discord.Member):
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="add_loss", description="Give a user a loss")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def add_loss(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET losses = losses + 1, streak = 0 WHERE user_id = ?', (user.id,))
@@ -285,7 +292,7 @@ async def add_loss(interaction: discord.Interaction, user: discord.Member):
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_loss", description="Remove a loss")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def remove_loss(interaction: discord.Interaction, user: discord.Member):
     c.execute('UPDATE stats SET losses = MAX(0, losses - 1) WHERE user_id = ?', (user.id,))
     conn.commit()
@@ -293,7 +300,7 @@ async def remove_loss(interaction: discord.Interaction, user: discord.Member):
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="add_tie", description="Give a user a tie")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def add_tie(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET ties = ties + 1 WHERE user_id = ?', (user.id,))
@@ -302,7 +309,7 @@ async def add_tie(interaction: discord.Interaction, user: discord.Member):
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_tie", description="Remove a tie")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@has_any_allowed_role()
 async def remove_tie(interaction: discord.Interaction, user: discord.Member):
     c.execute('UPDATE stats SET ties = MAX(0, ties - 1) WHERE user_id = ?', (user.id,))
     conn.commit()
