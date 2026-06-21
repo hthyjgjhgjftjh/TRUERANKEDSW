@@ -80,7 +80,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
             
-            # Look up the user via cache or direct API call
             user = guild.get_member(uid)
             if not user:
                 try:
@@ -90,7 +89,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
 
             mention = f"<@{uid}>"
 
-            # FIXED: Displays both names sequentially without brackets enclosing the mention tag.
             if custom_name:
                 name_display = f"**{custom_name}** {mention}"
             elif user:
@@ -200,8 +198,21 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
-    # FIXED: Re-enforced direct updating workflow path logic to overwrite row placeholders properly.
-    c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
+    # FIXED: Dynamically build the update query so existing names/countries are never accidentally cleared out
+    query = 'UPDATE stats SET rank = ?'
+    params = [position]
+    
+    if country != "":
+        query += ', country = ?'
+        params.append(country)
+    if custom_name != "":
+        query += ', custom_name = ?'
+        params.append(custom_name)
+        
+    query += ' WHERE user_id = ?'
+    params.append(user.id)
+    
+    c.execute(query, tuple(params))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()
     
