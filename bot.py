@@ -72,6 +72,10 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
     else:
         description = ""
         for index, (uid, rank, streak, country, custom_name) in enumerate(rows):
+            # FIXED: Insert a divider of dots right before processing the 4th place (index 3)
+            if index == 3:
+                description += "> ⸻⸻⸻⸻⸻\n"
+
             if index == 0: medal = "🥇 "
             elif index == 1: medal = "🥈 "
             elif index == 2: medal = "🥉 "
@@ -85,7 +89,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # FIXED: Avoid raw pings inside description fields to bypass the Discord app ID rendering glitch.
             if custom_name:
                 name_display = f"**{custom_name}**"
             elif user:
@@ -153,7 +156,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
-        # Save this specific message to database config for live background tracking
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
@@ -198,7 +200,7 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
-    conn.commit()  # Forces SQLite database file write immediately
+    conn.commit()
     
     await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
