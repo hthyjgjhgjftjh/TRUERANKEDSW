@@ -3,14 +3,10 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime
-import os  # Added for securely loading environment variables
+import os
 
 # --- CONFIGURATION ---
-# Changed to a list to support multiple Role IDs
 ALLOWED_ROLE_IDS = [1517891459372683404, 1517852942122614844] 
-
-# Remember to change this to an external permanent URL (like Imgur/Postimages) so it doesn't expire!
-LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1463637945280889066/1502588316430897212/image.png?ex=6a38f26b&is=6a37a0eb&hm=85dfdefedc6d7a3f1574e56a8484f389cc1b0bc1450a63589500f009b8eb637c"
 # ---------------------
 
 # Database setup - Using /app/data/ path for Railway Persistent Volumes
@@ -37,6 +33,11 @@ conn.commit()
 
 # Config table for managing live leaderboard messages
 c.execute('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value_id INTEGER)')
+# Ensure the config table also tracks custom string values (like dynamically changed URLs)
+try:
+    c.execute('ALTER TABLE config ADD COLUMN value_text TEXT DEFAULT ""')
+except sqlite3.OperationalError:
+    pass
 conn.commit()
 
 intents = discord.Intents.default()
@@ -46,39 +47,32 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- CUSTOM MULTI-ROLE CHECK ---
 def has_any_allowed_role():
-    """Custom check to see if the user has any of the IDs listed in ALLOWED_ROLE_IDS."""
     async def predicate(interaction: discord.Interaction) -> bool:
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return False
-        # Extract the IDs of all roles the user currently has
         user_role_ids = [role.id for role in interaction.user.roles]
-        # Check if there is any intersection between user roles and allowed roles
         if any(role_id in ALLOWED_ROLE_IDS for role_id in user_role_ids):
             return True
-        raise app_commands.MissingRole(ALLOWED_ROLE_IDS[0]) # Triggers the error handler
+        raise app_commands.MissingRole(ALLOWED_ROLE_IDS[0])
     return app_commands.check(predicate)
 
-# --- UTILITY HELPER ---
+# --- UTILITY HELPERS ---
 def get_flag_emoji(country_input: str) -> str:
-    """Converts a 2-letter country code (e.g. 'us', 'gb') into a regional indicator emoji string."""
     if not country_input:
         return ""
-    
     if len(country_input) > 4 or ord(country_input[0]) > 127:
         return f"{country_input} "
-        
     code = country_input.strip().upper()
     if len(code) == 2 and code.isalpha():
         emoji = chr(127462 + ord(code[0]) - 65) + chr(127462 + ord(code[1]) - 65)
         return f"{emoji} "
-    
     return ""
 
 def get_current_timestamp() -> str:
     return f"Last Updated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')} UTC"
 
-def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
-    """Helper to cleanly build the leaderboard embed structure."""
+def generate_leaderboard_embed(rows, guild: discord.Guild, banner_url: str = None) -> tuple[discord.Embed, discord.File]:
+    """Builds the leaderboard embed structure. Returns a tuple: (Embed, File)"""
     max_rank = max([row[1] for row in rows]) if rows else 16
     range_end = max(1, max_rank)
     
@@ -108,11 +102,18 @@ def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
             
         embed.description = description
 
-    if LEADERBOARD_BANNER_URL:
-        embed.set_image(url=LEADERBOARD_BANNER_URL)
-
     embed.set_footer(text=get_current_timestamp())
-    return embed
+    
+    # Image management system
+    file = None
+    if banner_url and (banner_url.startswith("http://") or banner_url.startswith("https://")):
+        embed.set_image(url=banner_url)
+    elif os.path.exists("banner.png"):
+        # Local file fallback if no valid URL is explicitly configured
+        file = discord.File("banner.png", filename="banner.png")
+        embed.set_image(url="attachment://banner.png")
+        
+    return embed, file
 
 @bot.event
 async def on_ready():
@@ -131,8 +132,13 @@ async def update_live_leaderboard(guild: discord.Guild):
     """Fetches data and automatically updates the active live tracking message."""
     c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
+
+    # Look up custom URL overrides in DB
+    c.execute('SELECT value_text FROM config WHERE key = "banner_url"')
+    banner_row = c.fetchone()
+    banner_url = banner_row[0] if banner_row else None
     
-    embed = generate_leaderboard_embed(rows, guild)
+    embed, file = generate_leaderboard_embed(rows, guild, banner_url=banner_url)
 
     c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
     channel_row = c.fetchone()
@@ -144,23 +150,39 @@ async def update_live_leaderboard(guild: discord.Guild):
         if channel:
             try:
                 message = await channel.fetch_message(message_row[0])
-                await message.edit(embed=embed)
+                # Note: Edits containing a local attachment require passing attachments/files properly
+                if file:
+                    await message.edit(embed=embed, attachments=[file])
+                else:
+                    await message.edit(embed=embed, attachments=[])
             except (discord.NotFound, discord.Forbidden):
                 print("Failed to update live leaderboard: Message or permissions missing.")
 
 # --- LEADERBOARD GROUP COMMANDS ---
 class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Leaderboard configurations"):
     
-    @app_commands.command(name="setup", description="Spawn the live-updating leaderboard tracking message")
+    @app_commands.command(name="setup", description="Spawn the live leaderboard tracking message")
     @has_any_allowed_role()
-    async def setup(self, interaction: discord.Interaction):
+    @app_commands.describe(banner_url="Optional: Provide a direct URL image link to override default behavior")
+    async def setup(self, interaction: discord.Interaction, banner_url: str = None):
         await interaction.response.defer(ephemeral=True)
+
+        if banner_url:
+            c.execute('INSERT OR REPLACE INTO config (key, value_text) VALUES ("banner_url", ?)', (banner_url,))
+            conn.commit()
+        else:
+            c.execute('DELETE FROM config WHERE key = "banner_url"')
+            conn.commit()
 
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
-        embed = generate_leaderboard_embed(rows, interaction.guild)
-        msg = await interaction.channel.send(embed=embed)
+        embed, file = generate_leaderboard_embed(rows, interaction.guild, banner_url=banner_url)
+        
+        if file:
+            msg = await interaction.channel.send(file=file, embed=embed)
+        else:
+            msg = await interaction.channel.send(embed=embed)
         
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
@@ -172,11 +194,18 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def view(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         
+        c.execute('SELECT value_text FROM config WHERE key = "banner_url"')
+        banner_row = c.fetchone()
+        banner_url = banner_row[0] if banner_row else None
+
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
-        embed = generate_leaderboard_embed(rows, interaction.guild)
-        await interaction.followup.send(embed=embed)
+        embed, file = generate_leaderboard_embed(rows, interaction.guild, banner_url=banner_url)
+        if file:
+            await interaction.followup.send(file=file, embed=embed)
+        else:
+            await interaction.followup.send(embed=embed)
 
 bot.tree.add_command(LeaderboardGroup())
 
@@ -259,7 +288,7 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
         return
         
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
-    c.execute('UPDATE stats SET streak = ? WHERE user_id = ?', (amount, user.id))
+    c.execute('UPDATE stats SET streak = ? WHERE user_id = ?', (user.id))
     conn.commit()
     
     await interaction.response.send_message(f"Set {user.mention}'s win streak to {amount}x 🔥!")
