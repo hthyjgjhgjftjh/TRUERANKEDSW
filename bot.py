@@ -308,14 +308,16 @@ async def remove_tie(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Removed a tie from {user.mention}!")
     await update_live_leaderboard(interaction.guild)
 
+# --- TRACKER STATS COMMAND ---
 @bot.tree.command(name="stats", description="Check stats")
 async def stats(interaction: discord.Interaction, user: discord.Member = None):
     target = user or interaction.user
     c.execute('SELECT wins, losses, rank, streak, country, ties, custom_name FROM stats WHERE user_id = ?', (target.id,))
     row = c.fetchone()
     
-    if not row:
-        await interaction.response.send_message("No stats found for this user.")
+    # Check if the user has no recorded row or if their record contains completely zeroed stats
+    if not row or (row[0] == 0 and row[1] == 0 and row[5] == 0 and row[2] == 0):
+        await interaction.response.send_message(f"No stats found for @{target.display_name}.", ephemeral=False)
         return
         
     wins, losses, rank, streak, country, ties, custom_name = row
