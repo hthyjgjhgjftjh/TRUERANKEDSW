@@ -5,12 +5,12 @@ import sqlite3
 from datetime import datetime
 import os
 
-# --- CONFIGURATION ---
+
 ALLOWED_ROLE_ID = 1517891459372683404
 LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1518166886750097552/1518245653443248188/rsw_banner.webp?ex=6a3937f3&is=6a37e673&hm=36209fea2c1640b27af2e81f94d27cb57290b574c75b7f130dadd17dc5b72dda"
-# ---------------------
 
-# Database setup
+
+
 db_path = '/app/data/stats.db' if os.path.exists('/app/data') else 'stats.db'
 conn = sqlite3.connect(db_path)
 c = conn.cursor()
@@ -38,7 +38,6 @@ intents.message_content = True
 intents.members = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- UTILITY HELPER ---
 def get_flag_emoji(country_input: str) -> str:
     if not country_input:
         return ""
@@ -76,7 +75,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # Strictly renders Custom Name OR falls back to Display Name, followed by the Mention Ping
             if custom_name and custom_name.strip():
                 display_name = custom_name.strip()
             elif user:
@@ -128,10 +126,10 @@ async def update_live_leaderboard(guild: discord.Guild):
                 message = await channel.fetch_message(message_row[0])
                 await message.edit(embed=embed)
             except discord.NotFound:
-                # Message was deleted, fail silently. Setup needs to be run again.
+              
                 pass
 
-# --- LEADERBOARD GROUP COMMANDS ---
+
 class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Leaderboard configurations"):
     
     @app_commands.command(name="setup", description="Spawn the live-updating leaderboard tracking message")
@@ -144,17 +142,17 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         c.execute('SELECT value_id FROM config WHERE key = "message_id"')
         message_row = c.fetchone()
 
-        # ONE LEADERBOARD CHECK: See if we already have an active tracking message
+      
         if channel_row and message_row:
             existing_channel = interaction.guild.get_channel(channel_row[0])
             if existing_channel:
                 try:
                     msg = await existing_channel.fetch_message(message_row[0])
-                    # If the message exists, block the command
+                  
                     await interaction.followup.send(f"❌ There is already an active leaderboard set up in {existing_channel.mention}!\nJump to it: {msg.jump_url}", ephemeral=True)
                     return
                 except discord.NotFound:
-                    # The message was deleted by a user, we can safely proceed and make a new one
+                
                     pass
 
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
@@ -181,7 +179,7 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
 
 bot.tree.add_command(LeaderboardGroup())
 
-# --- PROFILE & RANK POSITION COMMANDS ---
+
 @bot.tree.command(name="set_profile", description="Set a player's country flag and custom name safely")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 @app_commands.describe(
@@ -270,7 +268,7 @@ async def remove_lb_position(interaction: discord.Interaction, user: discord.Mem
     await interaction.followup.send(f"✅ Removed {user.mention} from the leaderboard.", ephemeral=True)
     await update_live_leaderboard(interaction.guild)
 
-# --- STATS RESET COMMAND ---
+
 @bot.tree.command(name="reset_stats", description="Completely wipe a user's stats and remove them from rankings")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def reset_stats(interaction: discord.Interaction, user: discord.Member):
@@ -289,7 +287,7 @@ async def reset_stats(interaction: discord.Interaction, user: discord.Member):
     await interaction.followup.send(f"🔄 Stats for {user.mention} have been reset to zero and they have been unranked.", ephemeral=True)
     await update_live_leaderboard(interaction.guild)
 
-# --- MATCH COMPONENT COMMANDS ---
+#
 @bot.tree.command(name="set_streak", description="Manually set a user's win streak")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def set_streak(interaction: discord.Interaction, user: discord.Member, amount: int):
@@ -355,7 +353,7 @@ async def remove_tie(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Removed a tie from {user.mention}!")
     await update_live_leaderboard(interaction.guild)
 
-# --- TRACKER STATS COMMAND ---
+
 @bot.tree.command(name="stats", description="Check stats")
 async def stats(interaction: discord.Interaction, user: discord.Member = None):
     target = user or interaction.user
