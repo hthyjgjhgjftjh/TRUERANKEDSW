@@ -8,6 +8,7 @@ import os  # Added for securely loading environment variables
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
 SECOND_ROLE_ID = 1434191340157276351
+LOGGING_CHANNEL_ID = 1520114874607210593
 LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1518166886750097552/1518245653443248188/rsw_banner.webp?ex=6a3937f3&is=6a37e673&hm=36209fea2c1640b27af2e81f94d27cb57290b574c75b7f130dadd17dc5b72dda"
 # ---------------------
 
@@ -110,6 +111,16 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
 async def on_ready():
     await bot.tree.sync()
     print(f'Logged in as {bot.user}')
+
+# --- LOGGING EVENT ---
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type == discord.InteractionType.application_command:
+        command_name = interaction.command.name
+        if interaction.channel_id == LOGGING_CHANNEL_ID and command_name != "stats":
+            log_channel = interaction.guild.get_channel(LOGGING_CHANNEL_ID)
+            if log_channel:
+                await log_channel.send(f"Command `{command_name}` used by {interaction.user} in {interaction.channel.mention}")
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -311,10 +322,19 @@ async def remove_win(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="add_loss", description="Give a user a loss")
 @app_commands.checks.has_any_role(ALLOWED_ROLE_ID, SECOND_ROLE_ID)
 async def add_loss(interaction: discord.Interaction, user: discord.Member):
+    c.execute('SELECT streak FROM stats WHERE user_id = ?', (user.id,))
+    row = c.fetchone()
+    old_streak = row[0] if row else 0
+    
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET losses = losses + 1, streak = 0 WHERE user_id = ?', (user.id,))
     conn.commit()
-    await interaction.response.send_message(f"Added a loss to {user.mention}. Streak broken!")
+    
+    msg = f"Added a loss to {user.mention}."
+    if old_streak > 0:
+        msg += " Streak broken!"
+    
+    await interaction.response.send_message(msg)
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_loss", description="Remove a loss")
